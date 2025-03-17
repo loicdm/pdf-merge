@@ -1,11 +1,35 @@
+mod image;
+mod pagesize;
+
+use lopdf::{Bookmark, Document, Object, ObjectId};
+use printpdf::{ImageTransform, Mm, PdfDocument};
+use std::{cmp::max, path::PathBuf, process::abort};
+
+use image::{
+    alpha_remover::RemoveAlpha, image_reader::read_image_from_file,
+    image_transform::get_image_transform_for_page_size, image_x_object::get_image_dimension_in_mm,
+};
+use pagesize::PageSizeInMm;
+
+const MIN_WIDTH_IN_MM: f64 = 210.0;
+const MIN_HEIGHT_IN_MM: f64 = 297.0;
+
 use std::{collections::BTreeMap, env, path::Path, process::exit};
 
 use glob::glob;
-use lopdf::{Bookmark, Document, Object, ObjectId};
+//use lopdf::{Bookmark, Document, Object, ObjectId};
 
 use std::process;
 
+// imports the `image` library with the exact version that we are using
+//use printpdf::*;
+
 use rfd::FileDialog;
+use std::convert::From;
+
+use colored::Colorize;
+
+//use image_crate::codecs::{bmp::BmpDecoder, jpeg::JpegDecoder, png::PngDecoder};
 
 fn usage() {
     println!("Usage: pdf-merge <input_directory> <output_file>");
@@ -186,6 +210,67 @@ fn merge_documents(input_documents: Vec<Document>) -> Document {
     document
 }
 
+fn image_to_doc(path: PathBuf) -> Document {
+    //let pagesize = None;
+    let page_size_option = Some(PageSizeInMm(210.0, 297.0));
+
+    let doc = PdfDocument::empty("Random Document Title");
+    let input_img_file = path.to_str().unwrap();
+    let img_result = read_image_from_file(input_img_file);
+    if let Err(ref e) = img_result {
+        println!(
+            "{}: cannot read file {}. {}: {}",
+            "Warning".yellow(),
+            input_img_file.blue().underline(),
+            "Error".red(),
+            e
+        );
+        abort();
+    };
+    let (color_type, mut img) = img_result.unwrap();
+    if let Some(page_size) = &page_size_option {
+        let image_transform = get_image_transform_for_page_size(&page_size, &img.image);
+        let PageSizeInMm(width, height) = page_size;
+        let (page, layer_index) = doc.add_page(
+            Mm(width.to_owned() as f32),
+            Mm(height.to_owned() as f32),
+            "Layer1",
+        );
+        let current_layer = doc.get_page(page).get_layer(layer_index);
+        img.remove_alpha(color_type);
+        img.add_to_layer(current_layer.clone(), image_transform);
+    } else {
+        let (original_image_width, original_image_height) = get_image_dimension_in_mm(&img.image);
+
+        let image_scale = max(
+            1,
+            max(
+                (MIN_WIDTH_IN_MM / original_image_width) as i32,
+                (MIN_HEIGHT_IN_MM / original_image_height) as i32,
+            ),
+        ) as f64;
+        let (page, layer_index) = doc.add_page(
+            Mm((original_image_width * image_scale) as f32),
+            Mm((original_image_height * image_scale) as f32),
+            "Layer1",
+        );
+        let current_layer = doc.get_page(page).get_layer(layer_index);
+        img.remove_alpha(color_type);
+        img.add_to_layer(
+            current_layer.clone(),
+            ImageTransform {
+                scale_x: Some(image_scale as f32),
+                scale_y: Some(image_scale as f32),
+                ..Default::default()
+            },
+        );
+    };
+
+    let bytes = doc.save_to_bytes();
+    let image_doc = Document::load_mem(bytes.unwrap().as_slice()).unwrap();
+    image_doc
+}
+
 fn main() {
     // Collect all command-line arguments into a vector
     let args: Vec<String> = env::args().collect();
@@ -243,9 +328,57 @@ fn main() {
         }
     }
 
-    // Save the merged PDF.
-    // Store file in current working directory.
-    // Note: Line is excluded when running doc tests
+    let input_path_glob_png = format!(
+        "{}/*.png",
+        input_path.canonicalize().unwrap().to_str().unwrap()
+    );
+
+    for entry in glob(input_path_glob_png.as_str()).expect("Failed to read glob pattern") {
+        match entry {
+            Ok(path) => input_documents.push(image_to_doc(path)),
+            Err(e) => println!("{:?}", e),
+        }
+    }
+
+    let input_path_glob_jpg = format!(
+        "{}/*.jpg",
+        input_path.canonicalize().unwrap().to_str().unwrap()
+    );
+
+    for entry in glob(input_path_glob_jpg.as_str()).expect("Failed to read glob pattern") {
+        match entry {
+            Ok(path) => input_documents.push(image_to_doc(path)),
+            Err(e) => println!("{:?}", e),
+        }
+    }
+
+    let input_path_glob_jpeg = format!(
+        "{}/*.jpeg",
+        input_path.canonicalize().unwrap().to_str().unwrap()
+    );
+
+    for entry in glob(input_path_glob_jpeg.as_str()).expect("Failed to read glob pattern") {
+        match entry {
+            Ok(path) => input_documents.push(image_to_doc(path)),
+            Err(e) => println!("{:?}", e),
+        }
+    }
+
+    let input_path_glob_bmp = format!(
+        "{}/*.bmp",
+        input_path.canonicalize().unwrap().to_str().unwrap()
+    );
+
+    for entry in glob(input_path_glob_bmp.as_str()).expect("Failed to read glob pattern") {
+        match entry {
+            Ok(path) => input_documents.push(image_to_doc(path)),
+            Err(e) => println!("{:?}", e),
+        }
+    }
+
+    // merge the pdfs
     let mut document = merge_documents(input_documents);
+
+    // Save the merged PDF.
     document.save(output_path).unwrap();
 }
