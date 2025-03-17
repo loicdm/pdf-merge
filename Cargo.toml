@@ -1,6 +1,6 @@
 [package]
-name = "pdf-merge"
-version = "0.2.0"
+name = "pm"
+version = "0.2.1"
 edition = "2024"
 
 [dependencies]
